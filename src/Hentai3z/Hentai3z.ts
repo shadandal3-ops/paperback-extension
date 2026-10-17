@@ -272,7 +272,7 @@ const titleRefusal = (title: string): boolean => BANNED_LABELS.test(title) || pa
  * second, measured live, and each is remembered so opening the title is free.
  */
 export const Hentai3zInfo: SourceInfo = {
-    version: '1.0.1',
+    version: '1.0.2',
     name: 'Hentai3z',
     icon: 'icon.png',
     author: 'Shmowzy27',
@@ -290,8 +290,11 @@ export const Hentai3zInfo: SourceInfo = {
 }
 
 export class Hentai3z implements SearchResultsProviding, MangaProviding, ChapterProviding, HomePageSectionsProviding, CloudflareBypassRequestProviding {
+    // Every listing reads twenty title pages behind Cloudflare, which can
+    // answer a burst with a fresh challenge, so the pace is kept below the
+    // six a second the mirror tolerated.
     requestManager = App.createRequestManager({
-        requestsPerSecond: 6,
+        requestsPerSecond: 4,
         requestTimeout: 60000,
         interceptor: {
             interceptRequest: async (request: Request): Promise<Request> => {
@@ -330,6 +333,11 @@ export class Hentai3z implements SearchResultsProviding, MangaProviding, Chapter
 
     private cloudflareError(): Error {
         return new Error(`CLOUDFLARE BYPASS ERROR:\nPlease go to the homepage of <${Hentai3zInfo.name}> and press the cloud icon.`)
+    }
+
+    private isBlock(error: unknown): boolean {
+        const message = error instanceof Error ? error.message : String(error)
+        return message.startsWith('CLOUDFLARE BYPASS ERROR') || message.includes('HTTP 429')
     }
 
     private checkResponse(status: number): void {
@@ -536,7 +544,12 @@ export class Hentai3z implements SearchResultsProviding, MangaProviding, Chapter
             try {
                 const inspection = await this.inspect(card.slug)
                 return { card: card, inspection: inspection, refused: inspection.refusal != undefined }
-            } catch {
+            } catch (error) {
+                // A Cloudflare check or a rate limit is the site refusing the
+                // connection, not this title. Swallowed, it emptied every
+                // listing without a word -- the cloud icon was never offered,
+                // so the source just never loaded. Raised, the app asks for it.
+                if (this.isBlock(error)) throw error
                 // A page that would not load cannot be vouched for.
                 return { card: card, refused: true }
             }
