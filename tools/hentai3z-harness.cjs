@@ -38,6 +38,10 @@ global.App = {
                 try {
                     requests++
                     const req = opts.interceptor ? await opts.interceptor.interceptRequest({ ...request }) : request
+                    // Stands in for Cloudflare challenging title pages mid-listing.
+                    if (global.__challengeTitles && /\/hentai\/[^/]+$/.test(req.url)) {
+                        return { data: '<title>Just a moment...</title>', status: 403, headers: {}, request: req }
+                    }
                     const res = await fetch(rewrite(req.url), {
                         method: req.method || 'GET',
                         headers: { accept: 'text/html,*/*;q=0.8', 'accept-language': 'en-US,en;q=0.9', 'user-agent': UA },
@@ -239,6 +243,22 @@ const expectGateThrow = async (label, fn, pattern = /will not be shown/i) => {
     }
 
     note('requests used', String(requests))
+    // Cloudflare challenging the title pages a listing reads must surface as
+    // the cloud-icon prompt. It used to be swallowed card by card, so the
+    // listing came back empty and the source simply never loaded.
+    {
+        const fresh = new Sources.Hentai3z()
+        global.__challengeTitles = true
+        try {
+            const res = await fresh.getViewMoreItems('views', { page: 4 })
+            check('a challenge on title pages asks for the cloud icon', false, `returned ${res.results.length} tiles instead`)
+        } catch (error) {
+            check('a challenge on title pages asks for the cloud icon', /^CLOUDFLARE BYPASS ERROR/.test(error.message), error.message.slice(0, 60))
+        } finally {
+            global.__challengeTitles = false
+        }
+    }
+
     console.log(failures > 0 ? `\n${failures} check(s) failed` : '\nall checks passed')
     process.exit(failures > 0 ? 1 : 0)
 })().catch((e) => { console.error('FAILED', e.stack); process.exit(1) })

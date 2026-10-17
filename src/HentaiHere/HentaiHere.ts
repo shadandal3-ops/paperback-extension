@@ -24,56 +24,121 @@ import {
 
 import * as cheerio from 'cheerio'
 import { GROUP_REFUSAL_MESSAGE, groupRefusal, TAG_ONLY_LABELS } from '../NHentai/ContentRules'
-import { CheerioAPI } from 'cheerio'
 
 export const HH_DOMAIN = 'https://hentaihere.com'
-const HH_CDN = 'https://hentaicdn.com/hentai'
 
 /**
- * Excluded by standing request. Yaoi is the site's category T27; the site's
- * taxonomy carries no fat, ugly bastard or bald tags, so on this site the BL
- * exclusion is the whole rule. The label list also scrubs anything matching
- * from the tag catalog offered in the filter UI.
+ * Excluded by standing request, by tag name. Checked against every tag a
+ * series or card names, and used to scrub the catalog offered in the filter UI.
  */
-//
-// Reverse Harem (T567) -- one woman with several men -- is excluded by the
-// user's rule on group scenes (../NHentai/ContentRules.ts), so it rides the
-// server-side exclusion alongside Yaoi. The site has no "group" category.
-const BANNED_TAG_IDS = ['27', '567']
 const BANNED_LABELS = /yaoi|boys?.?love|shounen[ -]?ai|\bmales only\b|tomgirl|crossdress|ugly bastard|\bbald\b|\bfat\b|gigantic breasts|\bold\s*m[ae]n\b|\bolder\s*m[ae]n\b|\bold\s*guy\b|\bgrandfather\b|\bgrandpa\b|\bgrand-?dad\b|\bgramps\b|\bdilf\b|reverse[- ]?harem|\bbbm\b|\bgang|\borgy\b|\b[mt]{2,}[mtf]\s*(?:threesome|foursome)\b|\bmm+f?\b|bestial|\bfurry\b|animal on|human on furry|octopus|\btentacl|\bmonster|\bslime\b|\binsect|\bsnake\b|\bspider\b|\bworm\b|\bcentaur\b|\bminotaur\b|\bhorse\b|\bdog\b|\bcat\b(?!\s*ears)|\bpig\b|\bfish\b|\bfrog\b|\bbird (?:girl|boy)\b|\bbear\b|\bwolf\b|\balien\b/i
 
-/** Appended to every text search; the search engine matches category names. */
-const SEARCH_SUFFIX = ' -yaoi'
-
-const SECTIONS: { id: string; label: string; sort: string }[] = [
-    { id: 'newest', label: 'Newest (Filtered)', sort: 'newest' },
-    { id: 'most-popular', label: 'Most Popular (Filtered)', sort: 'most-popular' },
-    { id: 'last-updated', label: 'Last Updated (Filtered)', sort: 'last-updated' }
-]
+/**
+ * "Trap", the site's name for tomgirl, and its kin -- tags only, since "trap"
+ * in a title is as likely "Honey Trap".
+ */
+const SITE_BANNED_LABELS = /\btrap\b|\bfemboy\b|\botokonoko\b/i
 
 /**
- * Listing state carried between pages. `token` names the saved server-side
- * filter (an `sf_...` handle the site issues after the filter POST); with it,
- * every later page is a plain GET that the server has already filtered.
+ * The same exclusions as the site's own tag ids, sent as `without=` on every
+ * listing so the server leaves them out and pages come back full. Resolved by
+ * name from the site's tag index (/search/tags, Oct 2026); any tag added later
+ * is caught by name on the card and at the details gate, and joins this list
+ * once the index has been read (see bannedIds).
  */
+const BANNED_TAG_IDS = [
+    '24', // Tentacles
+    '27', // Yaoi
+    '343', // Crossdressing
+    '344', // Trap
+    '353', // Dog Girls
+    '429', // Gang Rape
+    '462', // Gangbang
+    '567', // Reverse Harem
+    '696', // Ganguro
+    '957', // Cat Girls
+    '1175', // Monsters
+    '1243', // Monster Sex
+    '1268', // Fox Girls
+    '1371', // Cow Girls
+    '1409', // Monster Girls
+    '1412', // Wolf Girls
+    '1688', // Threesome (MMF)
+    '2315', // Furry
+    '2331', // Old Man
+    '2753', // Lizard Girl
+    '2763' // Insect
+]
+
+const bannedName = (name: string): boolean =>
+    BANNED_LABELS.test(name) || TAG_ONLY_LABELS.test(name) || SITE_BANNED_LABELS.test(name)
+
+/**
+ * Parodies are excluded, and on this site a parody is exactly what it files as
+ * "Doujinshi": every doujinshi names the series it parodies, and no original
+ * names one. So listings ask for originals only (`type=original`), and the
+ * details gate refuses anything with a parody or a doujinshi or video type.
+ */
+const LISTING_TYPE = 'original'
+const REFUSED_TYPES = /^(?:doujinshi|videos?)$/i
+
+const SECTIONS: { id: string; label: string; sort: string }[] = [
+    { id: 'last-updated', label: 'Last Updated (Filtered)', sort: 'latest' },
+    { id: 'newest', label: 'Newest (Filtered)', sort: 'newest' },
+    { id: 'most-popular', label: 'Most Popular (Filtered)', sort: 'most-viewed' }
+]
+
 interface ListingMetadata {
     page?: number
-    token?: string
-    sort?: string
     seen?: string[]
 }
 
+interface Book {
+    id: string
+    title: string
+    cover: string
+    type: string
+    status: string
+    artists: string[]
+    parodies: string[]
+    tags: { id: string; name: string }[]
+    chapters: { id: string; number: number; name: string; time?: Date }[]
+    refusal?: string
+}
+
+const MONTH_MS = 30 * 86400000
+const UNIT_MS: Record<string, number> = {
+    second: 1000, minute: 60000, hour: 3600000, day: 86400000,
+    week: 7 * 86400000, month: MONTH_MS, year: 365 * 86400000
+}
+
+/** "3 days ago", "an hour ago" -- the only dates the site shows a chapter with. */
+const relativeDate = (text: string): Date | undefined => {
+    const match = /(\d+|an?)\s+(second|minute|hour|day|week|month|year)s?\s+ago/i.exec(text)
+    if (match == undefined) return /just now|today/i.test(text) ? new Date() : undefined
+    const count = /^an?$/i.test(match[1] as string) ? 1 : Number(match[1])
+    return new Date(Date.now() - count * (UNIT_MS[(match[2] as string).toLowerCase()] ?? 0))
+}
+
+/** The numeric book id from a manga id: `S56854` (the old form) or `56854`. */
+const bookId = (mangaId: string): string => mangaId.replace(/^S/, '')
+
 /**
- * hentaihere.com with the standing exclusions enforced server-side.
+ * hentaihere.com, filtered.
  *
- * The site's /filter accepts a tag exclusion (s[tagOut]) and answers with a
- * saved-filter token; browsing through that token, the server itself never
- * sends the excluded content -- 62k of the site's 66k titles survive the yaoi
- * exclusion, and pagination stays clean. Text search rides on the search
- * engine's own minus operator instead, and the details gate backstops both.
+ * The site was rebuilt in October 2026: series live at /{type}/{id}-{slug},
+ * the reader at /reader/{id}-{slug}/{chapter}/page-1, and both answer the
+ * short /{type}/{id} and /reader/{id}/{chapter} forms with a redirect. The old
+ * /m/S{id} addresses redirect as well, so manga ids keep their `S{id}` form and
+ * library entries saved before the rebuild still open.
+ *
+ * Listings come from /search, which takes tags to include (`with`) and leave
+ * out (`without`) and so does the standing exclusions server-side. Each card
+ * names its tags too, so the rules are checked again before a card is shown,
+ * and the details gate backstops both.
  */
 export const HentaiHereInfo: SourceInfo = {
-    version: '1.4.4',
+    version: '2.0.0',
     name: 'HentaiHere (Filtered)',
     icon: 'icon.png',
     author: 'Shmowzy27',
@@ -92,8 +157,8 @@ export const HentaiHereInfo: SourceInfo = {
 
 export class HentaiHere implements SearchResultsProviding, MangaProviding, ChapterProviding, HomePageSectionsProviding, CloudflareBypassRequestProviding {
     requestManager = App.createRequestManager({
-        requestsPerSecond: 2,
-        requestTimeout: 60000,
+        requestsPerSecond: 3,
+        requestTimeout: 30000,
         interceptor: {
             interceptRequest: async (request: Request): Promise<Request> => {
                 request.headers = {
@@ -112,7 +177,7 @@ export class HentaiHere implements SearchResultsProviding, MangaProviding, Chapt
     })
 
     getMangaShareUrl(mangaId: string): string {
-        return `${HH_DOMAIN}/m/${mangaId}`
+        return `${HH_DOMAIN}/original/${bookId(mangaId)}`
     }
 
     async getCloudflareBypassRequestAsync(): Promise<Request> {
@@ -126,10 +191,14 @@ export class HentaiHere implements SearchResultsProviding, MangaProviding, Chapt
         })
     }
 
+    private cloudflareError(): Error {
+        return new Error(`CLOUDFLARE BYPASS ERROR:\nPlease go to the homepage of <${HentaiHereInfo.name}> and press the cloud icon.`)
+    }
+
     private checkResponse(status: number): void {
-        if (status === 403 || status === 503) {
-            throw new Error(`CLOUDFLARE BYPASS ERROR:\nPlease go to the homepage of <${HentaiHereInfo.name}> and press the cloud icon.`)
-        }
+        if (status === 403 || status === 503) throw this.cloudflareError()
+        if (status === 404) throw new Error('This title is no longer on the site.')
+        if (status === 429) throw new Error('The site is rate limiting this connection (HTTP 429). Wait a moment and try again.')
         if (status >= 500) {
             throw new Error(`The site returned an error (HTTP ${status}). It is probably down or overloaded -- try again shortly.`)
         }
@@ -138,125 +207,177 @@ export class HentaiHere implements SearchResultsProviding, MangaProviding, Chapt
         }
     }
 
-    private async fetchHtml(url: string, method: string = 'GET', body?: string): Promise<string> {
-        const request = App.createRequest({
-            url: url,
-            method: method,
-            data: body,
-            headers: body != undefined ? { 'content-type': 'application/x-www-form-urlencoded' } : undefined
-        })
-        const response = await this.requestManager.schedule(request, 3)
+    private async fetchText(url: string): Promise<string> {
+        const response = await this.requestManager.schedule(App.createRequest({ url: url, method: 'GET' }), 2)
         this.checkResponse(response.status)
-        return response.data as string
+        const text = response.data as string
+        // The challenge page can arrive with a success status.
+        if (/<title>\s*Just a moment/i.test(text)) throw this.cloudflareError()
+        return text
+    }
+
+    /** The tag index, `{id, name, count}` per tag, read once per session. */
+    private catalog: { id: number; name: string }[] | undefined
+
+    private async loadCatalog(): Promise<{ id: number; name: string }[]> {
+        if (this.catalog != undefined) return this.catalog
+        const parsed = JSON.parse(await this.fetchText(`${HH_DOMAIN}/search/tags`)) as { id: number; name: string }[]
+        this.catalog = Array.isArray(parsed) ? parsed : []
+        return this.catalog
+    }
+
+    /** The server-side exclusion: the resolved ids, plus any the index names since. */
+    private async bannedIds(): Promise<string[]> {
+        const ids = [...BANNED_TAG_IDS]
+        try {
+            for (const tag of await this.loadCatalog()) {
+                if (bannedName(tag.name) && !ids.includes(String(tag.id))) ids.push(String(tag.id))
+            }
+        } catch {
+            // The resolved list stands on its own.
+        }
+        return ids
+    }
+
+    private async searchUrl(options: { q?: string; sort?: string; include?: string[]; exclude?: string[] }, page: number): Promise<string> {
+        const without = await this.bannedIds()
+        for (const id of options.exclude ?? []) {
+            if (!without.includes(id)) without.push(id)
+        }
+
+        const params = [`type=${LISTING_TYPE}`]
+        if (options.q != undefined && options.q.length > 0) params.unshift(`q=${encodeURIComponent(options.q)}`)
+        if ((options.include ?? []).length > 0) params.push(`with=${(options.include as string[]).join(',')}`)
+        params.push(`without=${without.join(',')}`)
+        if (options.sort != undefined) params.push(`sort=${options.sort}`)
+        if (page > 1) params.push(`page=${page}`)
+        return `${HH_DOMAIN}/search?${params.join('&')}`
     }
 
     /**
-     * Registers the exclusion filter with the site and returns the first page
-     * of results plus the saved-filter token found in the page's own
-     * pagination links. The token's session cookie is captured by the app's
-     * cookie store when the redirect lands, so later pages just work.
+     * Listing cards: `article[data-card]`, each carrying its book id, its title,
+     * its type ("A original by ...") and its tags as links.
      */
-    private async openFilter(tagIn?: string[], tagOut?: string[]): Promise<{ html: string; token?: string }> {
-        // Whatever the reader chooses to leave out joins the standing
-        // exclusion rather than replacing it, so yaoi can never be filtered
-        // back in.
-        const excluded = [...BANNED_TAG_IDS]
-        for (const id of tagOut ?? []) {
-            if (!excluded.includes(id)) excluded.push(id)
-        }
-
-        const included = (tagIn ?? []).join(',')
-        const form = `action=doFilter&s%5Bseries%5D=&s%5BreleaseAct%5D=in&s%5Brelease%5D=&s%5BtagIn%5D=${encodeURIComponent(included)}&s%5BtagOut%5D=${encodeURIComponent(excluded.join(','))}`
-        const html = await this.fetchHtml(`${HH_DOMAIN}/filter`, 'POST', form)
-        const token = /[?&]s=(sf_[a-z0-9]+)/.exec(html)?.[1]
-        return { html, token }
-    }
-
-    private filterPageUrl(token: string, sort: string, page: number): string {
-        return `${HH_DOMAIN}/search?s=${token}&sort=${sort}&page=${page}`
-    }
-
-    /** Series cards are /m/S{id} anchors; the cover follows the id. */
-    private parseTiles(html: string, seen: Set<string>): PartialSourceManga[] {
+    private parseCards(html: string, seen: Set<string>): PartialSourceManga[] {
         const $ = cheerio.load(html)
         const tiles: PartialSourceManga[] = []
 
-        for (const element of $('a[href*="/m/S"]').toArray()) {
-            const anchor = $(element)
+        for (const element of $('article[data-card][data-book]').toArray()) {
+            const card = $(element)
+            const id = `S${card.attr('data-book') ?? ''}`
+            const title = card.find('h3').first().text().replace(/\s+/g, ' ').trim()
+            if (id === 'S' || title.length === 0 || seen.has(id)) continue
 
-            const id = /\/m\/(S\d+)\/?$/.exec(anchor.attr('href') ?? '')?.[1]
-            const title = anchor.text().trim()
-            if (id == undefined || title.length === 0 || seen.has(id)) continue
-            if (BANNED_LABELS.test(title)) continue
+            const type = /\/browse\/([a-z]+)/.exec(card.find('a[href*="/browse/"]').first().attr('href') ?? '')?.[1] ?? ''
+            if (REFUSED_TYPES.test(type)) continue
+
+            const labels = card.find('a[href*="/category/"], a[href*="/content/"]').toArray().map((anchor) => $(anchor).text().trim())
+            if (labels.some(bannedName) || groupRefusal(labels) != undefined || BANNED_LABELS.test(title)) continue
+
+            const image = card.find('img').first().attr('src') ?? `https://hermes.hentai.direct/hentai/cover/_${id}.jpg`
 
             seen.add(id)
-            tiles.push(App.createPartialSourceManga({
-                mangaId: id,
-                image: `${HH_CDN}/cover/_${id}.jpg`,
-                title: title
-            }))
+            tiles.push(App.createPartialSourceManga({ mangaId: id, image: image, title: title }))
         }
 
         return tiles
     }
 
-    private hasNextPage(html: string, page: number): boolean {
-        const numbers = [...html.matchAll(/[?&]page=(\d+)/g)].map((match) => Number(match[1]))
-        return numbers.some((value) => value > page)
+    private hasNextPage(html: string): boolean {
+        return /<a[^>]*rel="next"/.test(html)
+    }
+
+    private async listing(url: string, page: number, seen: Set<string>): Promise<PagedResults> {
+        const html = await this.fetchText(url)
+        return App.createPagedResults({
+            results: this.parseCards(html, seen),
+            metadata: this.hasNextPage(html) ? { page: page + 1, seen: Array.from(seen) } : undefined
+        })
+    }
+
+    /** A series page, read and judged by the standing rules. */
+    private async book(mangaId: string): Promise<Book> {
+        const $ = cheerio.load(await this.fetchText(this.getMangaShareUrl(mangaId)))
+
+        const detail = (label: string) => $('dl div').toArray()
+            .map((element) => $(element))
+            .find((row) => row.find('dt').first().text().trim().toLowerCase() === label)
+            ?.find('dd').first()
+        const names = (label: string) => (detail(label)?.find('a').toArray() ?? [])
+            .map((element) => $(element).text().replace(/\s+/g, ' ').trim())
+            .filter((name) => name.length > 0)
+
+        const tags: { id: string; name: string }[] = []
+        for (const element of $('ul[aria-label="Tags"] a').toArray()) {
+            const id = /\/(?:category|content)\/(\d+)/.exec($(element).attr('href') ?? '')?.[1]
+            const name = $(element).text().replace(/\s+/g, ' ').trim()
+            if (id != undefined && name.length > 0 && !tags.some((tag) => tag.id === id)) tags.push({ id: id, name: name })
+        }
+
+        // Every chapter is an option in the preview's chapter picker, newest
+        // first: "Chapter 4 - Season 2 (latest)".
+        const chapters: Book['chapters'] = []
+        for (const element of $('select[name="pages"] option').toArray()) {
+            const option = $(element)
+            const id = option.attr('value') ?? ''
+            if (!/^\d+$/.test(id) || chapters.some((chapter) => chapter.id === id)) continue
+
+            const label = option.text().replace(/\s+/g, ' ').replace(/\s*\(latest\)\s*$/i, '').trim()
+            const number = Number(/^chapter\s+(\d+(?:\.\d+)?)/i.exec(label)?.[1] ?? NaN)
+            chapters.push({ id: id, number: number, name: label, time: relativeDate(option.attr('data-added') ?? '') })
+        }
+        // A one-chapter book may have no picker; its reader link names the chapter.
+        if (chapters.length === 0) {
+            const id = /\/reader\/\d+[^/]*\/(\d+)\//.exec($('a[href*="/reader/"]').first().attr('href') ?? '')?.[1]
+            if (id != undefined) chapters.push({ id: id, number: 1, name: 'Chapter 1' })
+        }
+
+        const book: Book = {
+            id: mangaId,
+            title: ($('h1#book-title').first().text() || $('h1').first().text()).replace(/\s+/g, ' ').trim() || mangaId,
+            cover: $('[data-book-cover] img').first().attr('src') ?? $('meta[property="og:image"]').attr('content') ?? '',
+            type: names('type')[0] ?? '',
+            status: names('status')[0] ?? '',
+            artists: names('artist').filter((name) => !/^unknown$/i.test(name)),
+            parodies: names('parody'),
+            tags: tags,
+            chapters: chapters
+        }
+        book.refusal = this.refusalOf(book)
+        return book
+    }
+
+    private refusalOf(book: Book): string | undefined {
+        const labels = book.tags.map((tag) => tag.name)
+
+        const banned = book.tags.find((tag) => BANNED_TAG_IDS.includes(tag.id) || bannedName(tag.name))
+        if (banned != undefined) return `This title is filed under "${banned.name}", which is excluded by your settings, and will not be shown.`
+
+        if (groupRefusal(labels) != undefined) return GROUP_REFUSAL_MESSAGE
+
+        const parody = book.parodies.find((name) => !/^original/i.test(name))
+        if (parody != undefined) return `This title is a parody (${parody}), which your settings exclude, and will not be shown.`
+        if (REFUSED_TYPES.test(book.type)) return `This title is filed as "${book.type}", which your settings exclude, and will not be shown.`
+
+        if (BANNED_LABELS.test(book.title)) return 'This title carries content excluded by your settings and will not be shown.'
+        return undefined
     }
 
     async getMangaDetails(mangaId: string): Promise<SourceManga> {
-        const html = await this.fetchHtml(this.getMangaShareUrl(mangaId))
-        const $ = cheerio.load(html)
+        const book = await this.book(mangaId)
+        if (book.refusal != undefined) throw new Error(book.refusal)
 
-        const title = ($('meta[property="og:title"]').attr('content') ?? $('title').text())
-            .replace(/\s*\|.*$/, '')
-            .replace(/\s*(- Read Online.*|at HentaiHere.*)$/i, '')
-            .trim() || mangaId
-
-        const description = ($('meta[property="og:description"]').attr('content') ?? '').trim()
-        const image = ($('meta[property="og:image"]').attr('content') ?? `${HH_CDN}/cover/_${mangaId}.jpg`).trim()
-
-        // Every taxonomy entry on the page links to /search/T{id}; the labels
-        // double as the gate.
-        const tags: Tag[] = []
-        const seen = new Set<string>()
-        let banned: string | undefined
-        const labels: string[] = []
-        for (const element of $('a[href*="/search/T"]').toArray()) {
-            const anchor = $(element)
-            const tagId = /\/search\/(T\d+)/.exec(anchor.attr('href') ?? '')?.[1]
-            const label = anchor.text().trim()
-            if (tagId == undefined || label.length === 0 || seen.has(tagId)) continue
-
-            if (BANNED_TAG_IDS.some((id) => tagId === `T${id}`) || BANNED_LABELS.test(label) || TAG_ONLY_LABELS.test(label)) banned = banned ?? label
-            labels.push(label)
-
-            seen.add(tagId)
-            tags.push(App.createTag({ id: tagId, label: label }))
-        }
-
-        // The gate: excluded content refuses to open even from an old
-        // bookmark, since listing cards on this site carry no tag data.
-        if (banned != undefined) {
-            throw new Error(`This title is filed under "${banned}", which is excluded by your settings, and will not be shown.`)
-        }
-        if (groupRefusal(labels) != undefined) {
-            throw new Error(GROUP_REFUSAL_MESSAGE)
-        }
-        if (BANNED_LABELS.test(title)) {
-            throw new Error('This title carries content excluded by your settings and will not be shown.')
-        }
-
-        const status = /status[^a-z]{0,10}completed/i.test(html) ? 'Completed' : 'Ongoing'
+        const tags: Tag[] = book.tags.map((tag) => App.createTag({ id: tag.id, label: tag.name }))
 
         return App.createSourceManga({
             id: mangaId,
             mangaInfo: App.createMangaInfo({
-                titles: [title],
-                image: image,
-                desc: description,
-                status: status,
+                titles: [book.title],
+                image: book.cover,
+                desc: '',
+                status: /completed/i.test(book.status) ? 'Completed' : 'Ongoing',
+                author: book.artists.join(', '),
+                artist: book.artists.join(', '),
                 tags: tags.length > 0
                     ? [App.createTagSection({ id: 'tags', label: 'Tags', tags: tags })]
                     : []
@@ -265,63 +386,58 @@ export class HentaiHere implements SearchResultsProviding, MangaProviding, Chapt
     }
 
     async getChapters(mangaId: string): Promise<Chapter[]> {
-        const html = await this.fetchHtml(this.getMangaShareUrl(mangaId))
+        const book = await this.book(mangaId)
+        if (book.refusal != undefined) throw new Error(book.refusal)
 
-        {
-            const $gate = cheerio.load(html)
-            const labels = $gate('a[href*="/search/T"]').toArray().map((element) => $gate(element).text().trim())
-            const ids = $gate('a[href*="/search/T"]').toArray().map((element) => /\/search\/(T\d+)/.exec($gate(element).attr('href') ?? '')?.[1] ?? '')
-            if (ids.some((tagId) => BANNED_TAG_IDS.some((id) => tagId === `T${id}`))
-                || labels.some((label) => BANNED_LABELS.test(label) || TAG_ONLY_LABELS.test(label)) || groupRefusal(labels) != undefined) {
-                throw new Error('This title carries content excluded by your settings and will not be shown.')
-            }
-        }
-
-        const rows: { slug: string; number: number; name: string }[] = []
-        const seen = new Set<string>()
-
-        const $ = cheerio.load(html)
-        for (const element of $(`a[href*="/m/${mangaId}/"]`).toArray()) {
-            const anchor = $(element)
-
-            const slug = new RegExp(`/m/${mangaId}/(\\d+(?:\\.\\d+)?)/`).exec(anchor.attr('href') ?? '')?.[1]
-            if (slug == undefined || seen.has(slug)) continue
-
-            const name = anchor.text().replace(/\s+/g, ' ').trim()
-
-            seen.add(slug)
-            rows.push({
-                slug: slug,
-                number: Number(slug),
-                name: name.length > 0 ? name : `Chapter ${slug}`
-            })
-        }
-
-        // The site has no upload dates on series pages, so chapters carry no
-        // time rather than a fabricated one.
-        rows.sort((a, b) => a.number - b.number)
+        // Oldest first; an unnumbered chapter keeps the site's order.
+        const rows = book.chapters.map((chapter, index) => ({ chapter: chapter, order: -index }))
+        rows.sort((a, b) => (!isNaN(a.chapter.number) && !isNaN(b.chapter.number))
+            ? a.chapter.number - b.chapter.number
+            : a.order - b.order)
 
         return rows.map((row, index) => App.createChapter({
-            id: row.slug,
-            chapNum: isNaN(row.number) ? index + 1 : row.number,
-            name: row.name,
+            id: row.chapter.id,
+            chapNum: isNaN(row.chapter.number) ? index + 1 : row.chapter.number,
+            name: row.chapter.name,
             langCode: '🇬🇧',
-            sortingIndex: index
+            sortingIndex: index,
+            ...(row.chapter.time != undefined ? { time: row.chapter.time } : {})
         }))
     }
 
     /**
-     * The reader embeds its page list as `var rff_imageList = [...]` of CDN
-     * paths; the prefix is the shared hentaicdn root.
+     * The reader ships its page list as JSON: `<script type="application/json"
+     * data-reader-data>{"images": [...]}`.
      */
     async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
-        const html = await this.fetchHtml(`${HH_DOMAIN}/m/${mangaId}/${chapterId}/1/`)
+        // Chapters saved before the rebuild are numbered ("1", "2.5") rather
+        // than ids; a short id is looked up, and found again by number when it
+        // is not one of the book's own.
+        let chapter = chapterId
+        if (!/^\d{4,}$/.test(chapterId)) {
+            const book = await this.book(mangaId)
+            if (book.refusal != undefined) throw new Error(book.refusal)
+            const match = book.chapters.find((row) => row.id === chapterId)
+                ?? book.chapters.find((row) => row.number === Number(chapterId))
+                ?? (book.chapters.length === 1 ? book.chapters[0] : undefined)
+            if (match == undefined) throw new Error(`No pages were found for ${mangaId}/${chapterId}.`)
+            chapter = match.id
+        }
 
-        const body = /rff_imageList\s*=\s*\[([^\]]*)\]/.exec(html)?.[1] ?? ''
-        const pages: string[] = []
-        for (const match of body.matchAll(/["']([^"']+)["']/g)) {
-            const path = (match[1] as string).replace(/\\\//g, '/')
-            if (path.length > 0) pages.push(`${HH_CDN}${path.startsWith('/') ? '' : '/'}${path}`)
+        const html = await this.fetchText(`${HH_DOMAIN}/reader/${bookId(mangaId)}/${chapter}/page-1`)
+        const $ = cheerio.load(html)
+
+        let pages: string[] = []
+        try {
+            const data = JSON.parse($('script[data-reader-data]').first().html() ?? '{}') as { images?: string[] }
+            pages = (data.images ?? []).filter((url) => typeof url === 'string' && url.length > 0)
+        } catch {
+            // Fall through to the page markup.
+        }
+        if (pages.length === 0) {
+            pages = [...html.matchAll(/https:\\?\/\\?\/[^"'\s]+?\/\d{3,4}\.(?:webp|jpe?g|png)/g)]
+                .map((match) => (match[0] as string).replace(/\\\//g, '/'))
+                .filter((url, index, list) => !url.includes('/thumbnails/') && list.indexOf(url) === index)
         }
 
         if (pages.length === 0) {
@@ -339,108 +455,50 @@ export class HentaiHere implements SearchResultsProviding, MangaProviding, Chapt
         const page = metadata?.page ?? 1
         const seen = new Set(metadata?.seen ?? [])
 
-        const title = (query.title ?? '').trim()
-        const selected = (query.includedTags ?? [])[0]?.id
-
-        // A typed title goes through the search engine with the exclusion
-        // appended -- the minus operator matches category names, verified
-        // live. A tag selection goes through the saved filter instead, where
-        // the inclusion and the exclusion combine server-side.
-        if (title.length > 0) {
-            const html = await this.fetchHtml(`${HH_DOMAIN}/search?s=${encodeURIComponent(title + SEARCH_SUFFIX)}&page=${page}`)
-            const tiles = this.parseTiles(html, seen)
-
-            return App.createPagedResults({
-                results: tiles,
-                metadata: this.hasNextPage(html, page) ? { page: page + 1, seen: Array.from(seen) } : undefined
-            })
-        }
-
-        // Tag ids come through as T-prefixed; the filter form wants the bare
-        // number. "Always Excluded" markers are display-only and dropped.
+        // Tag ids from before the rebuild came T-prefixed; both forms work.
         const numeric = (tags: { id: string }[] | undefined): string[] =>
-            (tags ?? [])
-                .map((tag) => tag.id)
-                .filter((id) => /^T?\d+$/.test(id))
-                .map((id) => id.replace(/^T/, ''))
+            (tags ?? []).map((tag) => tag.id.replace(/^T/, '')).filter((id) => /^\d+$/.test(id))
 
-        const tagIn = numeric(query.includedTags)
-        const tagOut = numeric(query.excludedTags)
+        const title = (query.title ?? '').trim()
+        const url = await this.searchUrl({
+            q: title,
+            sort: title.length > 0 ? undefined : 'latest',
+            include: numeric(query.includedTags),
+            exclude: numeric(query.excludedTags)
+        }, page)
 
-        if (metadata?.token != undefined) {
-            const html = await this.fetchHtml(this.filterPageUrl(metadata.token, metadata.sort ?? 'newest', page))
-            const tiles = this.parseTiles(html, seen)
-
-            return App.createPagedResults({
-                results: tiles,
-                metadata: this.hasNextPage(html, page)
-                    ? { page: page + 1, token: metadata.token, sort: metadata.sort, seen: Array.from(seen) }
-                    : undefined
-            })
-        }
-
-        const opened = await this.openFilter(tagIn, tagOut)
-        const tiles = this.parseTiles(opened.html, seen)
-
-        return App.createPagedResults({
-            results: tiles,
-            metadata: opened.token != undefined && this.hasNextPage(opened.html, 1)
-                ? { page: 2, token: opened.token, sort: 'newest', seen: Array.from(seen) }
-                : undefined
-        })
+        return this.listing(url, page, seen)
     }
 
     /**
-     * Exclusion is offered: the site's own filter takes a list of tags to
-     * leave out (`s[tagOut]`), and the reader's choices are added to the
-     * standing exclusion rather than replacing it.
+     * Exclusion is offered: the site's search takes tags to leave out, and the
+     * reader's choices are added to the standing exclusion rather than
+     * replacing it.
      */
     async supportsTagExclusion(): Promise<boolean> {
         return true
     }
 
-    /**
-     * Categories and content tags read live off the site's own tag indexes,
-     * with anything matching the standing exclusions scrubbed from the offer.
-     */
+    /** The site's tag index, alphabetical, with everything excluded left off the offer. */
     async getSearchTags(): Promise<TagSection[]> {
-        const sections: TagSection[] = []
-
-        for (const [path, label] of [['category', 'Categories'], ['content', 'Content']] as [string, string][]) {
-            try {
-                const $ = cheerio.load(await this.fetchHtml(`${HH_DOMAIN}/tags/${path}`))
-                const tags: Tag[] = []
-                const seen = new Set<string>()
-
-                for (const element of $('a[href*="/search/T"]').toArray()) {
-                    const anchor = $(element)
-                    const tagId = /\/search\/(T\d+)/.exec(anchor.attr('href') ?? '')?.[1]
-                    const name = anchor.text().trim()
-                    if (tagId == undefined || name.length === 0 || seen.has(tagId)) continue
-                    if (BANNED_TAG_IDS.some((id) => tagId === `T${id}`) || BANNED_LABELS.test(name) || TAG_ONLY_LABELS.test(name)) continue
-
-                    seen.add(tagId)
-                    tags.push(App.createTag({ id: tagId, label: name }))
-                }
-
-                if (tags.length > 0) {
-                    tags.sort((a, b) => a.label.localeCompare(b.label))
-                    sections.push(App.createTagSection({ id: path, label: label, tags: tags }))
-                }
-            } catch {
-                // A failed index leaves the other sections in place.
-            }
+        let catalog: { id: number; name: string }[]
+        try {
+            catalog = await this.loadCatalog()
+        } catch {
+            return []
         }
 
-        return sections
+        const tags: Tag[] = catalog
+            .filter((tag) => !BANNED_TAG_IDS.includes(String(tag.id)) && !bannedName(tag.name) && !/^doujinshi$/i.test(tag.name))
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((tag) => App.createTag({ id: String(tag.id), label: tag.name }))
+
+        return tags.length > 0 ? [App.createTagSection({ id: 'tags', label: 'Tags', tags: tags })] : []
     }
 
     async getHomePageSections(sectionCallback: (section: HomeSection) => void): Promise<void> {
-        // One filter registration serves all three sections; each then pulls
-        // its own sort of the same saved filter. Reported once each, only
-        // after items are attached -- an unset `items` crashes the app.
-        const opened = await this.openFilter()
-
+        // Reported once each, only after items are attached: a section whose
+        // `items` is unset crashes the app when it reads the list.
         for (const entry of SECTIONS) {
             const section = App.createHomeSection({
                 id: entry.id,
@@ -450,38 +508,15 @@ export class HentaiHere implements SearchResultsProviding, MangaProviding, Chapt
                 items: []
             })
 
-            const html = opened.token != undefined
-                ? await this.fetchHtml(this.filterPageUrl(opened.token, entry.sort, 1))
-                : opened.html
-            section.items = this.parseTiles(html, new Set<string>())
+            const html = await this.fetchText(await this.searchUrl({ sort: entry.sort }, 1))
+            section.items = this.parseCards(html, new Set<string>())
             sectionCallback(section)
         }
     }
 
     async getViewMoreItems(homepageSectionId: string, metadata: ListingMetadata | undefined): Promise<PagedResults> {
         const page = metadata?.page ?? 1
-        const seen = new Set(metadata?.seen ?? [])
-        const sort = SECTIONS.find((entry) => entry.id === homepageSectionId)?.sort ?? 'newest'
-
-        let token = metadata?.token
-        let html: string
-        if (token == undefined) {
-            const opened = await this.openFilter()
-            token = opened.token
-            html = token != undefined && sort !== 'newest'
-                ? await this.fetchHtml(this.filterPageUrl(token, sort, page))
-                : opened.html
-        } else {
-            html = await this.fetchHtml(this.filterPageUrl(token, sort, page))
-        }
-
-        const tiles = this.parseTiles(html, seen)
-
-        return App.createPagedResults({
-            results: tiles,
-            metadata: token != undefined && this.hasNextPage(html, page)
-                ? { page: page + 1, token: token, sort: sort, seen: Array.from(seen) }
-                : undefined
-        })
+        const sort = (SECTIONS.find((entry) => entry.id === homepageSectionId) ?? SECTIONS[0]!).sort
+        return this.listing(await this.searchUrl({ sort: sort }, page), page, new Set(metadata?.seen ?? []))
     }
 }

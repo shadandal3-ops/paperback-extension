@@ -1,15 +1,16 @@
 /*
  * Runs the built NHentai, HentaiHere and Hentai2Read bundles against the live
- * sites.
+ * sites. HentaiHere and Hentai2Read were rebuilt on one platform in October
+ * 2026; Hentai2Read is skipped when Cloudflare refuses the network running this.
  *
  * Beyond listings/details/chapters/pages,every source is audited against the
  * standing exclusions (BL/yaoi/males-only, ugly bastard, bald) with real data:
  * known excluded titles must refuse to open, and sampled listing titles must
  * come back clean.
  *
- * The stub follows redirects by hand with a cookie jar, because hentaihere's
- * saved-filter flow sets its cookie on a 302 and Node's fetch drops cookies
- * across hops -- the app's native client carries them, so the stub must too.
+ * The stub follows redirects by hand with a cookie jar, as the app's native
+ * client does: both sites answer their short and pre-rebuild addresses
+ * (/original/{id}, /m/S{id}, /{slug}/) with a redirect.
  */
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)'
 
@@ -82,6 +83,9 @@ const check = (label, ok, detail) => {
 }
 const note = (label, detail) => console.log(`note  ${label}${detail ? ` — ${detail}` : ''}`)
 
+// The shared content rules, as the NHentai bundle exports them.
+const rulesOf = () => require(path.join(__dirname, '..', 'bundles', 'NHentai', 'source.js')).Sources
+
 const load = (dir, cls, gapMs) => {
     global.App = makeApp(gapMs)
     const key = require.resolve(path.join(__dirname, '..', 'bundles', dir, 'source.js'))
@@ -112,7 +116,7 @@ const expectGateThrow = async (label, fn) => {
         await fn()
         check(label, false, 'opened instead of refusing')
     } catch (error) {
-        check(label, /excluded by your settings/i.test(error.message), error.message.slice(0, 90))
+        check(label, /excluded by your settings|your settings exclude/i.test(error.message), error.message.slice(0, 90))
     }
 }
 
@@ -324,7 +328,8 @@ const expectGateThrow = async (label, fn) => {
     // ================= hentaihere =================
     console.log('\n===== HentaiHere (Filtered) =====')
     {
-        const s = load('HentaiHere', 'HentaiHere', 1200)
+        const s = load('HentaiHere', 'HentaiHere', 400)
+        const rules = rulesOf()
 
         const sections = []
         await s.getHomePageSections((sec) => sections.push(sec))
@@ -335,12 +340,12 @@ const expectGateThrow = async (label, fn) => {
         let meta = undefined
         const ids = []
         for (let i = 0; i < 2; i++) {
-            const res = await s.getViewMoreItems('newest', meta)
+            const res = await s.getViewMoreItems('last-updated', meta)
             for (const t of res.results) ids.push(t.mangaId)
             meta = res.metadata
             if (!meta) break
         }
-        check('saved-filter listing paginates without duplicates',
+        check('listing paginates without duplicates',
             ids.length > 40 && new Set(ids).size === ids.length,
             `${ids.length} items, ${new Set(ids).size} unique`)
 
@@ -359,14 +364,32 @@ const expectGateThrow = async (label, fn) => {
         if (img.unreachable) note('image CDN unreachable from here', `${new URL(pages.pages[0]).host}: ${img.type}`)
         else check('first page fetches real image bytes', img.ok, `${img.status} ${img.type}`)
 
-        // Ground truth from the site's own yaoi category listing.
-        const yaoiHtml = await (await fetch('https://hentaihere.com/search/T27', { headers: { 'user-agent': UA } })).text()
-        const yaoiId = /\/m\/(S\d+)/.exec(yaoiHtml)?.[1]
-        if (yaoiId) {
-            await expectGateThrow(`a yaoi title refuses to open (${yaoiId})`, () => s.getMangaDetails(yaoiId))
+        // Ground truth from the site's own Yaoi category listing (tag 27),
+        // which the source's listings never ask for.
+        const yaoiHtml = await (await fetch('https://hentaihere.com/category/27-yaoi', { headers: { 'user-agent': UA } })).text()
+        const yaoiBook = /<article[^>]*data-book="(\d+)"/.exec(yaoiHtml)?.[1]
+        if (yaoiBook) {
+            await expectGateThrow(`a yaoi title refuses to open (S${yaoiBook})`, () => s.getMangaDetails(`S${yaoiBook}`))
         } else {
             note('could not sample a yaoi id for the gate test')
         }
+
+        // Parodies are what the site files as Doujinshi; one must refuse.
+        const djHtml = await (await fetch('https://hentaihere.com/browse/doujinshi', { headers: { 'user-agent': UA } })).text()
+        const djBook = /<article[^>]*data-book="(\d+)"/.exec(djHtml)?.[1]
+        if (djBook) {
+            try {
+                await s.getMangaDetails(`S${djBook}`)
+                check(`a doujinshi parody refuses to open (S${djBook})`, false, 'opened instead of refusing')
+            } catch (error) {
+                check(`a doujinshi parody refuses to open (S${djBook})`, /parody|excluded by your settings|your settings exclude/i.test(error.message), error.message.slice(0, 90))
+            }
+        }
+
+        // A library entry saved before the rebuild: an old S-id and a chapter
+        // numbered rather than identified.
+        const legacy = await s.getChapterDetails(id, '1')
+        check('an old numbered chapter id still resolves its pages', legacy.pages.length > 0, `${legacy.pages.length} pages`)
 
         const search = await s.getSearchResults({ title: 'sister', includedTags: [], excludedTags: [], parameters: {} }, undefined)
         check('search returns results', search.results.length > 0, `${search.results.length} results`)
@@ -374,14 +397,28 @@ const expectGateThrow = async (label, fn) => {
         const tags = await s.getSearchTags()
         const offered = tags.flatMap((sec) => sec.tags.map((t) => t.label))
         check('tag catalog offered with banned entries scrubbed',
-            offered.length > 30 && !offered.some((label) => /yaoi/i.test(label)),
-            `${offered.length} tags, yaoi absent`)
+            offered.length > 30 && !offered.some((label) => rules.bannedTagName(label) || /^trap$/i.test(label)),
+            `${offered.length} tags, none banned`)
+
+        const byTag = await s.getSearchResults({ title: '', includedTags: [tags[0].tags.find((t) => t.label === 'Big Breasts') ?? tags[0].tags[0]], excludedTags: [], parameters: {} }, undefined)
+        check('selecting a catalog tag browses it', byTag.results.length > 0, `${byTag.results.length} results`)
     }
 
     // ================= hentai2read =================
     console.log('\n===== Hentai2Read (Filtered) =====')
-    {
-        const s = load('Hentai2Read', 'Hentai2Read', 1200)
+    // The site sits behind a Cloudflare check that refuses some networks
+    // outright -- the app passes it with the cloud icon, a script cannot. A
+    // refused runner is reported, not counted as a failure of the source.
+    const h2rProbe = await fetch('https://hentai2read.com/browse', { headers: { 'user-agent': UA } }).catch(() => undefined)
+    if (h2rProbe == undefined || h2rProbe.headers.get('cf-mitigated') === 'challenge') {
+        note('skipped', 'hentai2read.com answers this network with a Cloudflare challenge')
+    } else {
+        const s = load('Hentai2Read', 'Hentai2Read', 400)
+        const rules = rulesOf()
+        const pageData = async (path) => {
+            const html = await (await fetch(`https://hentai2read.com${path}`, { headers: { 'user-agent': UA } })).text()
+            return JSON.parse(/<script[^>]*data-page="app"[^>]*>([\s\S]*?)<\/script>/.exec(html)[1])
+        }
 
         const sections = []
         await s.getHomePageSections((sec) => sections.push(sec))
@@ -398,29 +435,13 @@ const expectGateThrow = async (label, fn) => {
             if (!meta) break
         }
         check('listing paginates without duplicates',
-            ids.length > 20 && new Set(ids).size === ids.length,
+            ids.length > 40 && new Set(ids).size === ids.length,
             `${ids.length} items, ${new Set(ids).size} unique`)
 
-        // Listing cards on this site carry no category data, so a banned
-        // title can sit on a listing and only the gate stops it -- which
-        // means the details sample must walk past gated entries. How many got
-        // gated is reported: that is the gate doing its job.
-        let id = undefined
-        let d = undefined
-        let gated = 0
-        for (const candidate of ids.slice(0, 6)) {
-            try {
-                d = await s.getMangaDetails(candidate)
-                id = candidate
-                break
-            } catch (error) {
-                if (/excluded by your settings/i.test(error.message)) { gated++; continue }
-                throw error
-            }
-        }
-        note('listing entries the gate refused', `${gated} of the first ${Math.min(6, ids.length)}`)
-        check('a non-excluded title opens', id != undefined && d.mangaInfo.titles[0]?.length > 0 && d.mangaInfo.image.startsWith('http'),
-            id != undefined ? `"${d.mangaInfo.titles[0]?.slice(0, 50)}" cats=${d.mangaInfo.tags[0]?.tags?.length ?? 0}` : 'all six gated')
+        const id = ids[0]
+        const d = await s.getMangaDetails(id)
+        check('details parse', d.mangaInfo.titles[0]?.length > 0 && d.mangaInfo.image.startsWith('https://'),
+            `"${d.mangaInfo.titles[0]?.slice(0, 50)}" tags=${d.mangaInfo.tags[0]?.tags?.length ?? 0}`)
 
         const chapters = await s.getChapters(id)
         check('chapters parse', chapters.length > 0, `${chapters.length} chapters`)
@@ -432,34 +453,16 @@ const expectGateThrow = async (label, fn) => {
         if (img.unreachable) note('image CDN unreachable from here', `${new URL(pages.pages[0]).host}: ${img.type}`)
         else check('first page fetches real image bytes', img.ok, `${img.status} ${img.type}`)
 
-        // Ground truth from the site's own Yaoi category listing, read off
-        // the book-grid cards (the page also carries sidebar widgets of
-        // unrelated titles, which is what an anchor-level scrape picks up).
-        // Each candidate is then verified against its OWN meta list before
-        // being asserted on.
-        const yaoiHtml = await (await fetch('https://hentai2read.com/hentai-list/category/Yaoi/', { headers: { 'user-agent': UA } })).text()
-        const gridCards = [...yaoiHtml.matchAll(/data-tags="([\d-]*)"[\s\S]{0,1500}?href="https:\/\/hentai2read\.com\/([a-z0-9_]+)\/"/g)]
-        check('the Yaoi listing is tagged 27 on every card',
-            gridCards.length > 10 && gridCards.every((m) => m[1].split('-').includes('27')),
-            `${gridCards.length} cards, all carry tag 27`)
+        // Library entries saved before the rebuild: an old slug, and a chapter
+        // numbered rather than identified. The slug redirects to the new page.
+        const legacy = await s.getChapterDetails('sister_sister', '1')
+        check('an old slug id and numbered chapter still resolve', legacy.pages.length > 0, `${legacy.pages.length} pages`)
 
-        let yaoiSlug = undefined
-        for (const m of gridCards.slice(0, 5)) {
-            const page = await (await fetch(`https://hentai2read.com/${m[2]}/`, { headers: { 'user-agent': UA } })).text()
-            const meta = /<ul class="list list-simple-mini">([\s\S]*?)<\/ul>/.exec(page)?.[1] ?? ''
-            if (/\/hentai-list\/category\/Yaoi\//.test(meta)) { yaoiSlug = m[2]; break }
-        }
-
-        if (yaoiSlug) {
-            await expectGateThrow(`a verified yaoi title refuses to open (${yaoiSlug})`, () => s.getMangaDetails(yaoiSlug))
-
-            // And the listing filter must keep it off the Yaoi listing itself.
-            const filtered = await s.getSearchResults({ title: '', includedTags: [{ id: 'cat:Yaoi' }], excludedTags: [], parameters: {} }, undefined)
-            check('the Yaoi category listing comes back empty',
-                filtered.results.length === 0,
-                `${filtered.results.length} survivors`)
-        } else {
-            note('no verified yaoi title found', 'gate not exercised')
+        // Ground truth from the site's own listings for Yaoi (tag 12) and for
+        // doujinshi, which on this site are the parodies.
+        for (const [label, path] of [['a yaoi title', '/category/12-yaoi'], ['a doujinshi parody', '/browse/doujinshi']]) {
+            const book = (await pageData(path)).props.books.data[0]
+            await expectGateThrow(`${label} refuses to open (${book.id})`, () => s.getMangaDetails(String(book.id)))
         }
 
         const search = await s.getSearchResults({ title: 'sister', includedTags: [], excludedTags: [], parameters: {} }, undefined)
@@ -467,9 +470,12 @@ const expectGateThrow = async (label, fn) => {
 
         const tags = await s.getSearchTags()
         const offered = (tags[0]?.tags ?? []).map((t) => t.label)
-        check('category catalog offered with banned entries scrubbed',
-            offered.length > 50 && !offered.some((label) => /yaoi|boy.?love/i.test(label)),
-            `${offered.length} categories, yaoi absent`)
+        check('tag catalog offered with banned entries scrubbed',
+            offered.length > 50 && !offered.some((label) => rules.bannedTagName(label) || /^trap$/i.test(label)),
+            `${offered.length} tags, none banned`)
+
+        const byTag = await s.getSearchResults({ title: '', includedTags: [tags[0].tags.find((t) => t.label === 'Big Breasts') ?? tags[0].tags[0]], excludedTags: [], parameters: {} }, undefined)
+        check('selecting a catalog tag browses it', byTag.results.length > 0, `${byTag.results.length} results`)
     }
 
     console.log(failures > 0 ? `\n${failures} check(s) failed` : '\nall checks passed')
