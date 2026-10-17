@@ -15532,7 +15532,7 @@ var _Sources = (() => {
   };
   var titleRefusal = (title) => BANNED_LABELS.test(title) || parodyIn(title) != void 0;
   var Hentai3zInfo = {
-    version: "1.0.1",
+    version: "1.0.2",
     name: "Hentai3z",
     icon: "icon.png",
     author: "Shmowzy27",
@@ -15550,8 +15550,11 @@ var _Sources = (() => {
   };
   var Hentai3z = class {
     constructor() {
+      // Every listing reads twenty title pages behind Cloudflare, which can
+      // answer a burst with a fresh challenge, so the pace is kept below the
+      // six a second the mirror tolerated.
       this.requestManager = App.createRequestManager({
-        requestsPerSecond: 6,
+        requestsPerSecond: 4,
         requestTimeout: 6e4,
         interceptor: {
           interceptRequest: async (request) => {
@@ -15589,6 +15592,10 @@ var _Sources = (() => {
     cloudflareError() {
       return new Error(`CLOUDFLARE BYPASS ERROR:
 Please go to the homepage of <${Hentai3zInfo.name}> and press the cloud icon.`);
+    }
+    isBlock(error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return message.startsWith("CLOUDFLARE BYPASS ERROR") || message.includes("HTTP 429");
     }
     checkResponse(status) {
       if (status === 403 || status === 503) throw this.cloudflareError();
@@ -15748,7 +15755,8 @@ Please go to the homepage of <${Hentai3zInfo.name}> and press the cloud icon.`);
         try {
           const inspection = await this.inspect(card.slug);
           return { card, inspection, refused: inspection.refusal != void 0 };
-        } catch {
+        } catch (error) {
+          if (this.isBlock(error)) throw error;
           return { card, refused: true };
         }
       }));
