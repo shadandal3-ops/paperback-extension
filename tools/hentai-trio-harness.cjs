@@ -326,6 +326,39 @@ const expectGateThrow = async (label, fn) => {
     }
 
     // ================= hentaihere =================
+    // ================= nhentai (new) =================
+    // The same class under its own id and library. Its own bundle is loaded
+    // and walked end to end, so a packaging fault in it cannot hide behind
+    // the filtered source passing.
+    console.log('\n===== nhentai (new) =====')
+    if (process.env.SKIP_NHENTAI === '1') console.log('skipped (SKIP_NHENTAI=1)')
+    else {
+        const info = require(path.join(__dirname, '..', 'bundles', 'NHentaiNew', 'source.js')).Sources.NHentaiNewInfo
+        check('its own name and version', info?.name === 'nhentai (new)' && /^\d+\.\d+\.\d+$/.test(info?.version ?? ''),
+            `${info?.name} ${info?.version}`)
+        const s = load('NHentaiNew', 'NHentaiNew', 7200)
+        const sections = []
+        await s.getHomePageSections((sec) => { if (Array.isArray(sec.items) && sec.items.length > 0) sections.push(sec) })
+        check('home sections all carry items', sections.length > 0,
+            sections.map((sec) => `${sec.title}:${sec.items.length}`).join(', '))
+        let opened = false
+        for (const tile of (sections[0]?.items ?? []).slice(0, 4)) {
+            try {
+                const chapters = await s.getChapters(tile.mangaId)
+                const pages = await s.getChapterDetails(tile.mangaId, chapters[0].id)
+                const probe = await probeImage(pages.pages[0], 'https://nhentai.net/')
+                check('a home tile opens to real pages', chapters.length > 0 && pages.pages.length > 0 && (probe.ok || probe.unreachable),
+                    `${tile.mangaId}: ${chapters.length} chapter(s), ${pages.pages.length} pages, ${probe.status} ${probe.type}`)
+                opened = true
+                break
+            } catch (error) {
+                // A tile can be refused by the rules; the next one is tried.
+                if (!/settings|English/i.test(error.message)) { check('a home tile opens to real pages', false, error.message); opened = true; break }
+            }
+        }
+        if (!opened) check('a home tile opens to real pages', false, 'every tried tile was refused')
+    }
+
     console.log('\n===== HentaiHere (Filtered) =====')
     {
         const s = load('HentaiHere', 'HentaiHere', 400)
