@@ -14887,7 +14887,7 @@ var _Sources = (() => {
   var load = getLoad(parse5, (dom, options) => options._useHtmlParser2 ? esm_default(dom, options) : renderWithParse5(dom));
 
   // src/FullManhwa/FullManhwaParser.ts
-  var SM_DOMAIN = "https://saymanhwa.com";
+  var SM_DOMAIN = "https://saymanhwa.net";
   var SM_BASE = `${SM_DOMAIN}/en`;
   var SM_PAGE_SIZE = 24;
   var SM_SECTIONS = [
@@ -14904,6 +14904,7 @@ var _Sources = (() => {
   ];
   var SM_HIDDEN_COOKIE = "say_catalog_hidden_series=%5B%22bl%22%5D; say_catalog_hidden_latest=%5B%22bl%22%5D";
   var SM_BANNED_GENRE_SLUGS = [
+    "bl",
     "aliens",
     "animals",
     "crossdressing",
@@ -14916,7 +14917,7 @@ var _Sources = (() => {
     // scenes (../NHentai/ContentRules.ts).
     "reverse-harem"
   ];
-  var SM_BANNED_GENRES = /\bmonsters?\b|\baliens?\b|\banimals?\b|crossdress|gender[- ]?bender|genderswap|\byaoi\b|boys?.?love|shounen[ -]?ai|reverse[- ]?harem/i;
+  var SM_BANNED_GENRES = /\bmonsters?\b|\baliens?\b|\banimals?\b|crossdress|gender[- ]?bender|genderswap|\byaoi\b|\bbl\b|boys?.?love|shounen[ -]?ai|reverse[- ]?harem/i;
   var SM_GENRE_PREFIX = "genre:";
   var PLACEHOLDER = /^(updating|unknown|none|n\/a|-)$/i;
   var routeFor = (id) => {
@@ -14984,6 +14985,22 @@ var _Sources = (() => {
       const slug = (option.attr("value") ?? "").trim();
       const label = option.text().trim();
       if (slug.length === 0 || label.length === 0 || seen.has(slug)) continue;
+      if (SM_BANNED_GENRES.test(label) || SM_BANNED_GENRES.test(slug.replace(/-/g, " "))) continue;
+      seen.add(slug);
+      genres.push({ id: `${SM_GENRE_PREFIX}${slug}`, label });
+    }
+    return genres;
+  };
+  var parseGenreIndex = ($2) => {
+    const genres = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const element of $2('a[href*="/genres/"]').toArray()) {
+      const link = $2(element);
+      const slug = /\/genres\/([^/?#"]+)\/?$/.exec(link.attr("href") ?? "")?.[1];
+      const label = link.find("strong").first().text().trim();
+      const count = parseInt(/(\d[\d,]*)\s+published/i.exec(link.text())?.[1]?.replace(/,/g, "") ?? "", 10);
+      if (slug == void 0 || label.length === 0 || seen.has(slug)) continue;
+      if (isNaN(count) || count <= 0) continue;
       if (SM_BANNED_GENRES.test(label) || SM_BANNED_GENRES.test(slug.replace(/-/g, " "))) continue;
       seen.add(slug);
       genres.push({ id: `${SM_GENRE_PREFIX}${slug}`, label });
@@ -15132,12 +15149,12 @@ var _Sources = (() => {
 
   // src/FullManhwa/FullManhwa.ts
   var FullManhwaInfo = {
-    version: "2.5.1",
+    version: "2.6.0",
     name: "SayManhwa",
     icon: "icon.png",
     author: "Shmowzy27",
     authorWebsite: "https://github.com/Shmowzy27",
-    description: "Extension that pulls content from saymanhwa.com, the successor to fullmanhwa.com.",
+    description: "Extension that pulls content from saymanhwa.net, the successor to fullmanhwa.com and saymanhwa.com.",
     contentRating: import_types2.ContentRating.ADULT,
     websiteBaseURL: SM_DOMAIN,
     sourceTags: [
@@ -15495,9 +15512,11 @@ The site limits how much one device may ask for at once, and refreshing a whole 
       return true;
     }
     /**
-     * The genre list is read off the catalog filter rather than hardcoded, so it
-     * tracks the site. If that request fails the browse and origin filters are
-     * still offered rather than leaving the user with no filters at all.
+     * The genre list is read off the site's genre index rather than hardcoded,
+     * so it tracks the site, and only genres holding a series are offered (see
+     * parseGenreIndex). The catalog filter's dropdown is the fallback should
+     * the index ever stop parsing. If both fail the browse and origin filters
+     * are still offered rather than leaving the user with no filters at all.
      */
     async getSearchTags() {
       const sections = [
@@ -15513,7 +15532,8 @@ The site limits how much one device may ask for at once, and refreshing a whole 
         })
       ];
       try {
-        const genres = parseGenres(await this.loadPage(`${SM_BASE}/latest`));
+        let genres = parseGenreIndex(await this.loadPage(`${SM_BASE}/genres`));
+        if (genres.length === 0) genres = parseGenres(await this.loadPage(`${SM_BASE}/latest`));
         if (genres.length > 0) {
           sections.push(App.createTagSection({
             id: "genre",
