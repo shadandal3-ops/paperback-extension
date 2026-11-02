@@ -316,7 +316,7 @@ const expectGateThrow = async (label, fn) => {
             tags.map((sec) => `${sec.id}:${sec.tags.length}`).join(' '))
         const tagOffer = (tags.find((sec) => sec.id === 'tag')?.tags ?? []).map((t) => t.label.toLowerCase())
         check('banned tags are scrubbed from the offered catalogs',
-            !tagOffer.some((label) => Sources.bannedTagName(label)),
+            !tagOffer.some((label) => rulesOf().bannedTagName(label)),
             `${tagOffer.length} tags offered, none banned`)
 
         const browsable = catalogs[0]?.tags[0]

@@ -48,7 +48,16 @@ import { GROUP_REFUSAL_MESSAGE, groupRefusal, TAG_ONLY_LABELS } from '../NHentai
 import { PARODY_PHRASES } from './ParodyNames'
 export { cleanTitle, splitTitle } from '../NHentai/SeriesMerge'
 
-export const H3Z_DOMAIN = 'https://hentai3z.cc'
+/**
+ * hentai3z.cc now answers every address with a permanent redirect to
+ * 18porncomic.com -- the same catalog on the same software, where a title lives
+ * at /comic/{slug} rather than /hentai/{slug}. The old /hentai/ address is
+ * itself redirected to the homepage there, so following the redirect is not
+ * enough: requests go to the new host and path directly. Slugs did not change,
+ * so titles already in a library keep resolving.
+ */
+export const H3Z_DOMAIN = 'https://18porncomic.com'
+const TITLE_PATH = 'comic'
 
 /**
  * Excluded by standing request, by name -- the site files its titles under
@@ -272,12 +281,12 @@ const titleRefusal = (title: string): boolean => BANNED_LABELS.test(title) || pa
  * second, measured live, and each is remembered so opening the title is free.
  */
 export const Hentai3zInfo: SourceInfo = {
-    version: '1.0.2',
+    version: '1.1.0',
     name: 'Hentai3z',
     icon: 'icon.png',
     author: 'Shmowzy27',
     authorWebsite: 'https://github.com/Shmowzy27',
-    description: 'Extension that pulls content from hentai3z.cc with the standing content exclusions applied.',
+    description: 'Extension that pulls content from hentai3z.cc (now 18porncomic.com) with the standing content exclusions applied.',
     contentRating: ContentRating.ADULT,
     websiteBaseURL: H3Z_DOMAIN,
     sourceTags: [
@@ -317,7 +326,7 @@ export class Hentai3z implements SearchResultsProviding, MangaProviding, Chapter
     getMangaShareUrl(mangaId: string): string {
         return isSeriesId(mangaId)
             ? `${H3Z_DOMAIN}/list-manga?search=${encodeURIComponent(baseFromSeriesId(mangaId))}`
-            : `${H3Z_DOMAIN}/hentai/${mangaId}`
+            : `${H3Z_DOMAIN}/${TITLE_PATH}/${mangaId}`
     }
 
     async getCloudflareBypassRequestAsync(): Promise<Request> {
@@ -445,7 +454,7 @@ export class Hentai3z implements SearchResultsProviding, MangaProviding, Chapter
         const cached = this.remembered<Inspection>(`d:${slug}`)
         if (cached != undefined) return cached
 
-        const $ = await this.loadPage(`${H3Z_DOMAIN}/hentai/${slug}`)
+        const $ = await this.loadPage(`${H3Z_DOMAIN}/${TITLE_PATH}/${slug}`)
 
         const title = ($('.detail_name h1').first().text() || $('h1').first().text()).replace(/\s+/g, ' ').trim() || slug
 
@@ -839,7 +848,7 @@ export class Hentai3z implements SearchResultsProviding, MangaProviding, Chapter
         const inspection = await this.inspect(slug)
         if (inspection.refusal != undefined) throw new Error(inspection.refusal)
 
-        const html = await this.fetchHtml(`${H3Z_DOMAIN}/hentai/${slug}/${chapter}`)
+        const html = await this.fetchHtml(`${H3Z_DOMAIN}/${TITLE_PATH}/${slug}/${chapter}`)
         const body = /slides_p_path\s*=\s*\[([^\]]*)\]/.exec(html)?.[1] ?? ''
 
         const pages: string[] = []

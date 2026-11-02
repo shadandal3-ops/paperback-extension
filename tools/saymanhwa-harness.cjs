@@ -1,5 +1,5 @@
 /*
- * Runs the built FullManhwa bundle (now targeting saymanhwa.com) against the
+ * Runs the built FullManhwa bundle (now targeting saymanhwa.net) against the
  * live site.
  *
  * Proves the four things the rewrite had to get right:
@@ -136,7 +136,7 @@ const note = (label, detail) => console.log(`note  ${label}${detail ? ` — ${de
     let imageChecked = 0
     for (const url of [firstPages.pages[0], firstPages.pages[Math.floor(firstPages.pages.length / 2)]]) {
         try {
-            const probe = await fetch(url, { headers: { 'user-agent': UA, referer: 'https://saymanhwa.com/' } })
+            const probe = await fetch(url, { headers: { 'user-agent': UA, referer: 'https://saymanhwa.net/' } })
             const type = probe.headers.get('content-type') ?? ''
             check(`page image fetches 200 image/* (${new URL(url).pathname.split('/').pop()})`,
                 probe.ok && type.startsWith('image/'), `${probe.status} ${type}`)
@@ -197,8 +197,8 @@ const note = (label, detail) => console.log(`note  ${label}${detail ? ` — ${de
 
     // The site's own genre list, so the scrub is measured against what it
     // actually publishes rather than against a copy that can go stale.
-    const BANNED_GENRES = ['aliens', 'animals', 'crossdressing', 'gender-bender', 'genderswap', 'monster', 'monsters', 'monsters-action']
-    const catalogGenres = [...new Set([...(await (await fetch('https://saymanhwa.com/en/series', { headers: { 'user-agent': UA } })).text())
+    const BANNED_GENRES = ['bl', 'aliens', 'animals', 'crossdressing', 'gender-bender', 'genderswap', 'monster', 'monsters', 'monsters-action']
+    const catalogGenres = [...new Set([...(await (await fetch('https://saymanhwa.net/en/series', { headers: { 'user-agent': UA } })).text())
         .matchAll(/<option value="([a-z0-9-]+)"/g)].map((m) => m[1]))]
     const bannedOnSite = BANNED_GENRES.filter((g) => catalogGenres.includes(g))
 
@@ -213,7 +213,7 @@ const note = (label, detail) => console.log(`note  ${label}${detail ? ` — ${de
     // A title from an excluded genre must not open. Ground truth is the site's
     // own listing for that genre.
     if (bannedOnSite.length > 0) {
-        const html = await (await fetch(`https://saymanhwa.com/en/genres/${bannedOnSite[0]}`, { headers: { 'user-agent': UA } })).text()
+        const html = await (await fetch(`https://saymanhwa.net/en/genres/${bannedOnSite[0]}`, { headers: { 'user-agent': UA } })).text()
         const victim = (/\/en\/series\/([a-z0-9-]+)/.exec(html) ?? [])[1]
         if (victim) {
             try {
@@ -231,7 +231,7 @@ const note = (label, detail) => console.log(`note  ${label}${detail ? ` — ${de
     // Excluding a genre must drop that genre's series from a listing.
     if (offeredGenres.length > 0) {
         const target = offeredGenres.includes('yuri') ? 'yuri' : offeredGenres[0]
-        const rawHtml = await (await fetch(`https://saymanhwa.com/en/genres/${target}`, { headers: { 'user-agent': UA } })).text()
+        const rawHtml = await (await fetch(`https://saymanhwa.net/en/genres/${target}`, { headers: { 'user-agent': UA } })).text()
         const members = [...new Set([...rawHtml.matchAll(/\/en\/series\/([a-z0-9-]+)/g)].map((m) => m[1]))]
 
         const withExclusion = await s.getSearchResults(
@@ -290,7 +290,7 @@ const note = (label, detail) => console.log(`note  ${label}${detail ? ` — ${de
     // is whether it has come back: if a BL type ever appears again, the leak
     // assertions below start running and the exclusion is proven against live
     // data once more.
-    const catalogHtml = await rawFetch('https://saymanhwa.com/en/series')
+    const catalogHtml = await rawFetch('https://saymanhwa.net/en/series')
     const badges = [...new Set([...catalogHtml.matchAll(/series-type-badge[^>]*>([\s\S]*?)</g)]
         .map((m) => m[1].trim().toUpperCase()).filter(Boolean))]
     const blIsBack = badges.includes('BL')
@@ -298,7 +298,7 @@ const note = (label, detail) => console.log(`note  ${label}${detail ? ` — ${de
         ? 'a BL type is being published again -- leak checks below are live'
         : `absent; type badges are ${badges.join(', ') || 'none'} and the badge filter is dormant`)
 
-    const blSlugs = blIsBack ? slugsOf(await rawFetch('https://saymanhwa.com/en/bl')) : []
+    const blSlugs = blIsBack ? slugsOf(await rawFetch('https://saymanhwa.net/en/bl')) : []
     const allSlugs = slugsOf(catalogHtml)
     const sameAsCatalog = blSlugs.length > 0
         && blSlugs.length === allSlugs.length

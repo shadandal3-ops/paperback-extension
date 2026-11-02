@@ -1,12 +1,10 @@
 /*
  * Runs the built Hentai3z bundle against the live catalog.
  *
- * hentai3z.cc sits behind an interactive Cloudflare check that no script can
- * pass, so requests are sent to 18porncomic.com instead: the same catalog on
- * the same software (the same titles under the same tags, page for page,
- * verified against hentai3z.cc in a browser), with no check in front. Only the
- * addresses differ -- /hentai/{slug} there is /comic/{slug} here -- and they
- * are rewritten on the way out, so the source itself runs unchanged.
+ * hentai3z.cc now permanently redirects to 18porncomic.com -- the same catalog
+ * on the same software -- and the source talks to 18porncomic.com directly, so
+ * requests go out unchanged. A stray hentai3z.cc address is still rewritten, so
+ * an old bookmark-style URL is exercised against the live host.
  *
  * Ground truth is read off the site's own pages rather than hardcoded, so the
  * checks track the catalog.
@@ -39,7 +37,7 @@ global.App = {
                     requests++
                     const req = opts.interceptor ? await opts.interceptor.interceptRequest({ ...request }) : request
                     // Stands in for Cloudflare challenging title pages mid-listing.
-                    if (global.__challengeTitles && /\/hentai\/[^/]+$/.test(req.url)) {
+                    if (global.__challengeTitles && /\/(?:hentai|comic)\/[^/]+$/.test(req.url)) {
                         return { data: '<title>Just a moment...</title>', status: 403, headers: {}, request: req }
                     }
                     const res = await fetch(rewrite(req.url), {
@@ -172,7 +170,7 @@ const expectGateThrow = async (label, fn, pattern = /will not be shown/i) => {
             Sources.chapterNumber('1-a', 'Chapter 1A') === 1.1 && Sources.chapterNumber('1-b', 'Chapter 1B') === 1.2
             && Sources.chapterNumber('chapter-108', 'Chapter 108') === 108 && isNaN(Sources.chapterNumber('english', 'English')))
         const pages = await s.getChapterDetails('boarding-diary-uncensored', 'boarding-diary-uncensored/chapter-108')
-        check('manhwa: a chapter has its pages', pages.pages.length > 20 && pages.pages.every((p) => /^https:\/\/bk\.18porncomic\.com\//.test(p)),
+        check('manhwa: a chapter has its pages', pages.pages.length > 20 && pages.pages.every((p) => /^https:\/\/(?:bk|img)\.18porncomic\.com\//.test(p)),
             `${pages.pages.length} pages, ${pages.pages[0]}`)
 
         const doujin = await s.getChapters('guruguru-netachou-107')

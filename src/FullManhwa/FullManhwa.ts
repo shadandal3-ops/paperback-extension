@@ -27,6 +27,7 @@ import {
     bannedGenreOn,
     isLastPage,
     parseChapters,
+    parseGenreIndex,
     parseGenres,
     parseMangaDetails,
     parsePages,
@@ -50,12 +51,12 @@ import {
  * resolve, so the existing library keeps working.
  */
 export const FullManhwaInfo: SourceInfo = {
-    version: '2.5.1',
+    version: '2.6.0',
     name: 'SayManhwa',
     icon: 'icon.png',
     author: 'Shmowzy27',
     authorWebsite: 'https://github.com/Shmowzy27',
-    description: 'Extension that pulls content from saymanhwa.com, the successor to fullmanhwa.com.',
+    description: 'Extension that pulls content from saymanhwa.net, the successor to fullmanhwa.com and saymanhwa.com.',
     contentRating: ContentRating.ADULT,
     websiteBaseURL: SM_DOMAIN,
     sourceTags: [
@@ -514,9 +515,11 @@ export class FullManhwa implements SearchResultsProviding, MangaProviding, Chapt
     }
 
     /**
-     * The genre list is read off the catalog filter rather than hardcoded, so it
-     * tracks the site. If that request fails the browse and origin filters are
-     * still offered rather than leaving the user with no filters at all.
+     * The genre list is read off the site's genre index rather than hardcoded,
+     * so it tracks the site, and only genres holding a series are offered (see
+     * parseGenreIndex). The catalog filter's dropdown is the fallback should
+     * the index ever stop parsing. If both fail the browse and origin filters
+     * are still offered rather than leaving the user with no filters at all.
      */
     async getSearchTags(): Promise<TagSection[]> {
         const sections: TagSection[] = [
@@ -533,7 +536,8 @@ export class FullManhwa implements SearchResultsProviding, MangaProviding, Chapt
         ]
 
         try {
-            const genres = parseGenres(await this.loadPage(`${SM_BASE}/latest`))
+            let genres = parseGenreIndex(await this.loadPage(`${SM_BASE}/genres`))
+            if (genres.length === 0) genres = parseGenres(await this.loadPage(`${SM_BASE}/latest`))
             if (genres.length > 0) {
                 sections.push(App.createTagSection({
                     id: 'genre',

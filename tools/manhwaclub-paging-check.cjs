@@ -60,12 +60,16 @@ const check = (label, ok, detail) => {
         search1.metadata?.page === 2 && search2.results.length > 0 && search2.results[0].mangaId !== search1.results[0].mangaId,
         `p1=${search1.results.length} p2=${search2.results.length}`)
 
-    const chapters = await source.getChapters('manitto')
-    const raw = chapters.filter((c) => c.langCode === KOREAN)
-    const translated = chapters.filter((c) => c.langCode === BRITISH)
+    // ManhwaClub now ships as two sources, one per track (see
+    // manhwaclub-split-check.cjs), so the collision this guarded against is
+    // checked across them: each keeps its own language and none is lost.
+    const rawSource = new (require(path.join(__dirname, '..', 'bundles', 'ManhwaClubRaw', 'source.js')).Sources.ManhwaClubRaw)()
+    const translated = await source.getChapters('manitto')
+    const raw = await rawSource.getChapters('manitto')
     check('raw and translated both kept, separated by language',
-        raw.length > 0 && translated.length > 0,
-        `${chapters.length} total: ${translated.length} translated, ${raw.length} raw`)
+        raw.length > 0 && translated.length > 0
+            && raw.every((c) => c.langCode === KOREAN) && translated.every((c) => c.langCode === BRITISH),
+        `${translated.length} translated, ${raw.length} raw`)
 
     process.exit(failures > 0 ? 1 : 0)
 })().catch((error) => { console.error('FAILED:', error.message); process.exit(1) })

@@ -13,7 +13,9 @@ import { CheerioAPI } from 'cheerio'
  * Every page sits behind an `/en` locale prefix and a bare path 302s to it, so
  * requests are built against SM_BASE and never the bare domain.
  */
-export const SM_DOMAIN = 'https://saymanhwa.com'
+// saymanhwa.com stopped answering in late 2026; the site now serves, and names
+// itself canonically, from saymanhwa.net with the same routes and slugs.
+export const SM_DOMAIN = 'https://saymanhwa.net'
 export const SM_BASE = `${SM_DOMAIN}/en`
 
 /** Listings render 24 cards a page; a short page is the last one. */
@@ -55,13 +57,14 @@ export const SM_HIDDEN_COOKIE = 'say_catalog_hidden_series=%5B%22bl%22%5D; say_c
 /**
  * Genres excluded by standing request, as this site's own taxonomy spells
  * them. It is a manhwa catalogue rather than a doujinshi one, so most of the
- * shared blocklist has no genre here to catch: there is no BL, yaoi or
- * shounen-ai genre among its 151, and the type badge no longer offers BL
- * either.
+ * shared blocklist has no genre here to catch. There is no yaoi or shounen-ai
+ * genre, but a "BL" genre appeared in late 2026 (/genres/bl) alongside the
+ * type badge, so it is excluded here as well as by the badge check.
  *
  * `yuri` is deliberately absent -- the standing exclusion is male-to-male.
  */
 export const SM_BANNED_GENRE_SLUGS = [
+    'bl',
     'aliens',
     'animals',
     'crossdressing',
@@ -79,7 +82,7 @@ export const SM_BANNED_GENRE_SLUGS = [
  * The same rule by name, for scrubbing the offered list and for reading a
  * series' own genres back off its page.
  */
-const SM_BANNED_GENRES = /\bmonsters?\b|\baliens?\b|\banimals?\b|crossdress|gender[- ]?bender|genderswap|\byaoi\b|boys?.?love|shounen[ -]?ai|reverse[- ]?harem/i
+const SM_BANNED_GENRES = /\bmonsters?\b|\baliens?\b|\banimals?\b|crossdress|gender[- ]?bender|genderswap|\byaoi\b|\bbl\b|boys?.?love|shounen[ -]?ai|reverse[- ]?harem/i
 
 /** Genre ids are namespaced so routeFor can tell them from sections/origins. */
 export const SM_GENRE_PREFIX = 'genre:'
@@ -223,6 +226,35 @@ export const parseGenres = ($: CheerioAPI): { id: string; label: string }[] => {
         const slug = (option.attr('value') ?? '').trim()
         const label = option.text().trim()
         if (slug.length === 0 || label.length === 0 || seen.has(slug)) continue
+        if (SM_BANNED_GENRES.test(label) || SM_BANNED_GENRES.test(slug.replace(/-/g, ' '))) continue
+
+        seen.add(slug)
+        genres.push({ id: `${SM_GENRE_PREFIX}${slug}`, label: label })
+    }
+
+    return genres
+}
+
+/**
+ * The genre index at /genres, keeping only genres that hold a published
+ * series. The catalog filter's own dropdown lists every genre ever typed into
+ * the site -- 245 of them, two thirds with nothing under them -- and a filter
+ * that can only ever return an empty page is worse than not offering it. The
+ * index states each genre's count, so the empty ones are left out here. The
+ * standing exclusions apply exactly as they do to the dropdown.
+ */
+export const parseGenreIndex = ($: CheerioAPI): { id: string; label: string }[] => {
+    const genres: { id: string; label: string }[] = []
+    const seen = new Set<string>()
+
+    for (const element of $('a[href*="/genres/"]').toArray()) {
+        const link = $(element)
+
+        const slug = /\/genres\/([^/?#"]+)\/?$/.exec(link.attr('href') ?? '')?.[1]
+        const label = link.find('strong').first().text().trim()
+        const count = parseInt(/(\d[\d,]*)\s+published/i.exec(link.text())?.[1]?.replace(/,/g, '') ?? '', 10)
+        if (slug == undefined || label.length === 0 || seen.has(slug)) continue
+        if (isNaN(count) || count <= 0) continue
         if (SM_BANNED_GENRES.test(label) || SM_BANNED_GENRES.test(slug.replace(/-/g, ' '))) continue
 
         seen.add(slug)

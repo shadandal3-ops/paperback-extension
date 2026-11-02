@@ -11,10 +11,29 @@ Paperback installs extensions from a repository URL, not from a file. Add this
 URL in **Paperback → Settings → Extensions → Add Repository**:
 
 ```
-https://shmowzy27.github.io/paperback-extension/
+https://shadandal3-ops.github.io/paperback-extension/
 ```
 
-Then install **HentaiNexus** from the list.
+Then install the sources you want from the list.
+
+> The link only works once GitHub Pages is switched on for this repository:
+> **Settings → Pages → Build and deployment → Source: Deploy from a branch**,
+> branch **`gh-pages`**, folder **`/ (root)`**. Every push to `main` rebuilds
+> `gh-pages` through the *Bundle and Deploy* workflow.
+
+### Sources in this repository
+
+| Source | Site |
+|---|---|
+| HentaiNexus | hentainexus.com |
+| nhentai (Filtered) / nhentai (new) | nhentai.net |
+| AsmHentai (English) | asmhentai.com |
+| Hentai2Read (Filtered) | hentai2read.com |
+| HentaiHere (Filtered) | hentaihere.com |
+| Hentai3z | hentai3z.cc, now served from 18porncomic.com |
+| MangaKatana (18+) | mangakatana.com |
+| ManhwaClub (English) / (Raw) | manhwaclub.net |
+| SayManhwa | saymanhwa.net (formerly fullmanhwa.com, then saymanhwa.com) |
 
 > The repository is named `paperback-extension` because GitHub's automated
 > naming rules renamed it on creation. The URL above is the one that works.
